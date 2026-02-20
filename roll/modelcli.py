@@ -27,6 +27,10 @@ from dataclasses import dataclass, field
 from typing import List
 import logging
 
+PARAMANTS_FILE = "params.pkl"
+REQUIRED_ARTIFACTS = [PARAMANTS_FILE, "sig_analysis"]
+DEFAULT_EXP_NAME = 'Default'
+
 @dataclass
 class ModelContext:
     exp_name: str
@@ -47,45 +51,67 @@ class ModelCLI:
         exp_manager = C["exp_manager"]
         exp_manager["kwargs"]["uri"] = "file:" + str(Path(uri_folder).expanduser())
         logger.info(f"Experiment uri: {exp_manager['kwargs']['uri']}")
-        qlib.init(provider_uri=provider_uri, region=region, exp_manager=exp_manager) 
+        qlib.init(provider_uri=provider_uri, region=region, exp_manager=exp_manager)
 
     def filter_rec(self, rec):
         ic_info, ic_list = self.get_ic_info(rec)
         ic_filter = self.kwargs['rec_filter']
         if not ic_filter:
             return True
-        # print(ic_list, ic_filter)
         all_passed = all(val > list(d.values())[0] for val, d in zip(ic_list, ic_filter))
-        # print("all_passed:", all_passed)
         if not all_passed:
             return False
         return True
 
+    def _is_valid_recorder(self, recorder):
+        """
+        辅助方法：判定一个 recorder 是否符合条件 (降低认知复杂度的核心)
+        """
+        artifacts = recorder.list_artifacts()
+
+        # 使用 all() 检查所有必要产物是否存在
+        if not artifacts or not all(f in artifacts for f in REQUIRED_ARTIFACTS):
+            return False
+
+        # 检查自定义过滤器
+        return self.filter_rec(recorder)
+
     def get_model_list(self):
-        logger.info(f"get all model in the uri_folder: {self.kwargs['uri_folder']}")
-        f_list = self.kwargs['model_filter']
+        uri_folder = self.kwargs.get('uri_folder')
+        model_filter = self.kwargs.get('model_filter')
+
+        logger.info(f"get all model in the uri_folder: {uri_folder}")
+
         exps = R.list_experiments()
         ret = []
-        for a, b in exps.items():
-            if a == 'Default':
+
+        for name, _ in exps.items():
+            # 1. 基础过滤：排除默认项目和不匹配的项目 (使用 Early Return 思想)
+            if name == DEFAULT_EXP_NAME or not check_match_in_list(name, model_filter):
                 continue
-            if not check_match_in_list(a, f_list):
-                continue
-            mc =  ModelContext(a) 
-            exp = R.get_exp(experiment_name=a)
+
+            exp = R.get_exp(experiment_name=name)
+            mc = ModelContext(name)
+
+            # 2. 遍历记录器
             for rid in exp.list_recorders():
-                rec = exp.get_recorder(recorder_id=rid)
-                if not rec.list_artifacts():
-                    continue
-                lista = rec.list_artifacts()
-                if "params.pkl" not in lista or "sig_analysis" not in lista:
-                    continue
-                if not self.filter_rec(rec):
-                    continue
-                mc.rid.append(rid)
-            ret.append(mc)
-        logger.info(f"model_filter {self.kwargs['model_filter']}, rec_filter {self.kwargs['rec_filter']}")
-        logger.info(f"experiment num: {str(len(ret))}, rid num: {str(sum(len(mc.rid) for mc in ret))}")
+                recorder = exp.get_recorder(recorder_id=rid)
+
+                # 3. 使用辅助函数进行逻辑判定，保持代码扁平
+                if self._is_valid_recorder(recorder):
+                    mc.rid.append(rid)
+
+            # 只有当这个实验下有符合条件的记录时才添加
+            if mc.rid:
+                ret.append(mc)
+
+        # 日志输出逻辑
+        rec_filter = self.kwargs.get('rec_filter')
+        total_rids = sum(len(mc.rid) for mc in ret)
+
+        logger.info(f"model_filter {model_filter}, rec_filter {rec_filter}")
+        logger.info(f"experiment num: {len(ret)}, rid num: {total_rids}")
+
         return ret
 
     def get_ic_info(self, rec):
@@ -118,7 +144,6 @@ class ModelCLI:
         ic_info, ic_list = self.get_ic_info(rec)
         data_train_vec, train_time_vec = self.get_train_time(rec)
         print("\t", rec.id, task["model"]['class'], task['dataset']['kwargs']['handler']['class'], ic_info, data_train_vec, train_time_vec)
-        # print(task)
 
 
     def ls(self, all=False):
@@ -147,7 +172,7 @@ class ModelCLI:
                 continue
             for rid in exp.list_recorders():
                 rec = exp.get_recorder(recorder_id=rid)
-                if (not rec.list_artifacts()) or ("params.pkl" not in rec.list_artifacts()) or ("sig_analysis" not in rec.list_artifacts()):
+                if (not rec.list_artifacts()) or (PARAMANTS_FILE not in rec.list_artifacts()) or ("sig_analysis" not in rec.list_artifacts()):
                     logger.info(f"Experiment: {name} 删除 Recorder: {rid} ")
                     exp.delete_recorder(rid)
 
@@ -166,12 +191,10 @@ class ModelCLI:
                 rec = exp.get_recorder(recorder_id=rid)
                 task = rec.load_object("task")
 
-                model = rec.load_object("params.pkl")
+                model = rec.load_object(PARAMANTS_FILE)
                 logger.info(f"模型加载成功:{rec.id}")
                 self.print_rec(rec)
-                # print(rec.load_object("task"))
                 dataset_config = task['dataset']
-                # pprint(dataset_config)
 
                 predict_date1 = pd.Timestamp(self.kwargs['predict_dates'][0]['start'])
                 predict_date2 = pd.Timestamp(self.kwargs['predict_dates'][0]['end'])
@@ -179,13 +202,10 @@ class ModelCLI:
                 dataset_config['kwargs']['handler']['kwargs']['end_time'] = predict_date2
                 if stock_list is not None:
                     dataset_config['kwargs']['handler']['kwargs']['instruments'] = stock_list
-                # pprint(dataset_config)
 
                 dataset = init_instance_by_config(dataset_config)
 
                 logger.info("数据集加载成功")
-                # example_df = dataset.prepare("test")
-                # print(example_df.head())
                 pred_score = model.predict(dataset, segment="test")
                 pprint(pred_score)
                 ret.append([mc.exp_name, rid, pred_score])
@@ -196,7 +216,7 @@ class ModelCLI:
         问股, 分析股票列表的 score
         """
         results = self.analysis(stock_list=self.kwargs.get('stock_list', []))
-        
+
         if not results:
             logger.warning("未获取到分析结果 (results is empty).")
             return
@@ -207,7 +227,7 @@ class ModelCLI:
         选股, 分析csi300成分股的 score
         """
         results = self.analysis()
-        
+
         if not results:
             logger.warning("未获取到分析结果 (results is empty).")
             return
@@ -240,9 +260,6 @@ class ModelCLI:
         df_final['datetime'] = pd.to_datetime(df_final['datetime'])
         df_final = df_final.sort_values(by='datetime')
 
-        # --- 2. 终端打印 ---
-        # 打印表格 (psql 风格好看)
-        # print(tabulate(df_final, headers='keys', tablefmt='psql', showindex=False))
 
         real_df = self.get_real_label()
         alpha158_df = self.get_alpha_data()
@@ -252,9 +269,9 @@ class ModelCLI:
         df_final['datetime'] = pd.to_datetime(df_final['datetime'])
         label_clean['datetime'] = pd.to_datetime(label_clean['datetime'])
         result_df = pd.merge(
-            df_final, 
-            label_clean, 
-            on=['datetime', 'instrument'], 
+            df_final,
+            label_clean,
+            on=['datetime', 'instrument'],
             how='left'
         )
         result_df['error'] = result_df['score'] - result_df['real_label']
@@ -273,7 +290,7 @@ class ModelCLI:
         # --- 4. 保存 Markdown 和 CSV ---
         append_to_file(md_file_path, f" {now_str}\n\n")
         append_to_file(md_file_path, f" {self.kwargs}\n\n")
-        
+
         # inquiry 模式下，按股票拆分保存
         if stock_list:
             for stock in stock_list:
@@ -325,7 +342,7 @@ class ModelCLI:
                     # 确保类型一致：把两边都转为字符串比较，最稳妥
                     # (假设 date 是 Timestamp, temp_real_df['datetime'] 也是 Timestamp)
                     daily_real_df = temp_real_df[temp_real_df['datetime'] == date].copy()
-                    
+
                     # 3. 准备要合并的数据
                     # 我们只需要 instrument 和 label
                     if 'real_label' in daily_real_df.columns:
@@ -338,7 +355,7 @@ class ModelCLI:
                         value_cols = [c for c in cols if c not in ['datetime', 'instrument']]
                         if value_cols:
                             # 假设最后一列是 label
-                            target_col = value_cols[-1] 
+                            target_col = value_cols[-1]
                             daily_label = daily_real_df[['instrument', target_col]].rename(columns={target_col: 'real_label'})
                         else:
                             print("Warning: 没在 real_df 里找到 label 列")
@@ -365,8 +382,8 @@ class ModelCLI:
                 # 5. 合并 Alpha158 数据
                 ret_df = pd.merge(
                     ret_df,
-                    alpha158_df_daily, 
-                    on='instrument', 
+                    alpha158_df_daily,
+                    on='instrument',
                     how='left'
                 )
 
@@ -389,7 +406,7 @@ class ModelCLI:
         append_to_file(md_file_path, f"{df_final.to_markdown(index=False)}")
         # 保存 CSV
         df_final.to_csv(save_dir / "total.csv", index=False, encoding="utf-8-sig")
-        
+
         logger.info("分析结果保存完成。")
 
     def filter_ret_df(self, df):
@@ -436,8 +453,6 @@ class ModelCLI:
             end_time = end_time,
             freq='day')
         df.columns = ['real_label']
-        # print(df.info()) 
-        # print(df)
         return df
 
     def get_alpha_data(self, name="Alpha158"):
@@ -460,7 +475,6 @@ class ModelCLI:
             handler = Alpha360(**handler_kwargs)
 
         # 3. 获取 DataFrame
-        # col_set="feature" 表示只获取特征列，不包含 label
         df = handler.fetch(col_set="feature")
         print(df)
         return df
