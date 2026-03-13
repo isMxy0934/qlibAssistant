@@ -12,7 +12,7 @@ export default defineConfig({
     ],
     nav: [
       { text: '首页', link: '/' },
-      { text: '文档', link: '/pages/notes/' },
+      { text: '文档', link: '/pages/docs' },
       { text: '随笔', link: '/pages/essays/' },
       { text: '马后炮', link: '/pages/mahoupao' },
       { text: '帮助', link: '/pages/about' },
@@ -21,7 +21,10 @@ export default defineConfig({
       {
         text: '数据目录',
         link: '/',
-        items: [{ text: 'selection_20260310_17_37_47', link: '/score/selection_20260310_17_37_47/' },
+        items: [{ text: 'selection_20260312_17_09_40', link: '/score/selection_20260312_17_09_40/' },
+      { text: 'selection_20260312_15_28_31', link: '/score/selection_20260312_15_28_31/' },
+      { text: 'selection_20260311_15_14_44', link: '/score/selection_20260311_15_14_44/' },
+      { text: 'selection_20260310_17_37_47', link: '/score/selection_20260310_17_37_47/' },
       { text: 'selection_20260309_15_48_03', link: '/score/selection_20260309_15_48_03/' },
       { text: 'selection_20260308_21_11_10', link: '/score/selection_20260308_21_11_10/' },
       { text: 'selection_20260308_18_24_44', link: '/score/selection_20260308_18_24_44/' },
