@@ -45,9 +45,9 @@ def generate_pages() -> None:
         print(f'错误: 数据目录不存在 {DATA_DIR}')
         return
 
-    # 清空 docs（保留 .vitepress 和 pages 用户页面）
+    # 清空 docs（保留 .vitepress、pages 和 public 用户资源）
     ensure_dir(DOCS_DIR)
-    preserve = {'.vitepress', 'pages'}
+    preserve = {'.vitepress', 'pages', 'public'}
     for p in DOCS_DIR.iterdir():
         if p.name in preserve:
             continue
